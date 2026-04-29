@@ -64,5 +64,5 @@ def test_time_min_is_positive_integer():
         assert isinstance(result["time_min"], int), (
             f"time_min should be int, got {type(result['time_min']).__name__}"
         )
-        assert result["time_min"] > 0, "time_min must be positive"g
+        assert result["time_min"] > 0, "time_min must be positive"
 
