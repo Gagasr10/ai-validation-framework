@@ -116,8 +116,8 @@ def recommend_recipe(ingredients, system_prompt: str = "") -> dict | str:
             raise ValueError ("Model crashed on empty input")
         return {"error": "Empty string not allowed", "status":400}
 
-    if isinstance(ingredients, str) and ingredients ==[""]:
-        return {"error": "Empty string not allowed", "status":400}
+    if isinstance(ingredients, str) and ingredients.strip() == "":
+        return {"error": "Empty string not allowed", "status": 400}
 
     if isinstance(ingredients, str) and len(ingredients) > 100:
         time.sleep(0.5)
