@@ -1,26 +1,29 @@
 """
 ai_model.py
-Real API recipe reccommendation using Claude API (claude-haiku).
-Falls back to a local mock when ANTHROPIC_API_KEY is not set - useful for offline dev / CI without secrets
 
+Real API recipe recommendation using Claude API (claude-haiku).
+Falls back to a local mock when ANTHROPIC_API_KEY is not set -
+useful for offline dev / CI without secrets.
 """
 
 import json
+import logging
 import os
 import random
 import re
 import time
 
+logger = logging.getLogger(__name__)
 
-#------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Real Claude API implementation
-#------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
-def _call_claude(ingredients: list[str]) -> dict:
-    """Call Clude Haiku and parse the JSON response."""
-    import anthropic # imported here so the module loads without the package
+def _call_claude(ingredients: list[str], system_prompt: str = "") -> dict:
+    """Call Claude Haiku and parse the JSON response."""
+    import anthropic  # imported here so the module loads without the package
 
-    client = anthropic.Anthropic()   #reads ANTHROPIC_API_KEY from env
+    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
 
     prompt = (
         f"You are a recipe assistant. "
@@ -31,9 +34,12 @@ def _call_claude(ingredients: list[str]) -> dict:
         f'"ingredients": [...]}}'
     )
 
+    sys = system_prompt if system_prompt else "You are a helpful recipe assistant."
+
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=200,
+        system=sys,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -45,10 +51,10 @@ def _call_claude(ingredients: list[str]) -> dict:
 
     return json.loads(raw)
 
+
 # ---------------------------------------------------------------------------
 # Mock fallback (no API key required)
 # ---------------------------------------------------------------------------
-
 
 _KNOWN_RECIPES = {
     frozenset(["eggs", "flour", "milk"]): ("Pancakes", 15),
@@ -65,7 +71,12 @@ _KNOWN_RECIPES = {
 
 
 def _call_mock(ingredients: list[str]) -> dict:
-    """Deterministic mock that simulates realistic AI behaviour."""
+    """
+    Deterministic mock that simulates realistic AI behaviour.
+
+    Note: ingredient matching uses frozenset, so order is irrelevant.
+    E.g. ["eggs", "flour", "milk"] == ["milk", "eggs", "flour"] -> same recipe.
+    """
     time.sleep(random.uniform(0.05, 0.3))
 
     key = frozenset(ingredients)
@@ -101,8 +112,8 @@ def recommend_recipe(ingredients, system_prompt: str = "") -> dict | str:
     ingredients : list[str] | str | None
         Ingredients to cook with.
     system_prompt : str
-        Ignored when using the real API (kept for test-suite compatibility).
-        When the mock is active it controls output format ("JSON" → dict).
+        Forwarded to the Claude API as the system message.
+        When the mock is active it controls output format ("JSON" -> dict).
 
     Returns
     -------
@@ -111,17 +122,17 @@ def recommend_recipe(ingredients, system_prompt: str = "") -> dict | str:
     """
 
     # ---- input validation (same behaviour regardless of backend) ----------
-    if ingredients is None or (isinstance(ingredients, list) and len (ingredients) == 0):
+    if ingredients is None or (isinstance(ingredients, list) and len(ingredients) == 0):
         if random.random() < 0.3:
-            raise ValueError ("Model crashed on empty input")
-        return {"error": "Empty string not allowed", "status":400}
+            raise ValueError("Model crashed on empty input")
+        return {"error": "Empty string not allowed", "status": 400}
 
     if isinstance(ingredients, str) and ingredients.strip() == "":
         return {"error": "Empty string not allowed", "status": 400}
 
     if isinstance(ingredients, str) and len(ingredients) > 100:
         time.sleep(0.5)
-        return{"recipe_name": "Input too long", "confidence": 0.3, "time_min":0}
+        return {"recipe_name": "Input too long", "confidence": 0.3, "time_min": 0}
 
     # ---- choose backend ---------------------------------------------------
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -130,12 +141,11 @@ def recommend_recipe(ingredients, system_prompt: str = "") -> dict | str:
     if use_real_api:
         try:
             ing_list = ingredients if isinstance(ingredients, list) else [ingredients]
-            return _call_claude(ing_list)
-        except Exception as exc:  #noqa BLE001
-            #Gracefull degradation: faill through to mock on any API error
-            print(f"[ai_model] Claude API error ({exc}), failing back to mock.")
+            return _call_claude(ing_list, system_prompt=system_prompt)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Claude API error (%s) — falling back to mock.", exc)
 
-   # ---- mock path --------------------------------------------------------
+    # ---- mock path --------------------------------------------------------
     ing_list = ingredients if isinstance(ingredients, list) else [ingredients]
     result = _call_mock(ing_list)
 
