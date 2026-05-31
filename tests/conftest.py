@@ -15,10 +15,25 @@ from golden_dataset import GOLD_DATA
 # ---------------------------------------------------------------------------
 
 def pytest_configure(config):
-    """Register custom markers"""
-    config.addinivalue_line("markers", "smoke: fast, critical-path tests" )
+    """Register custom markers."""
+    config.addinivalue_line("markers", "smoke: fast, critical-path tests")
     config.addinivalue_line("markers", "regression: full regression suite")
     config.addinivalue_line("markers", "slow: tests that take > 2 s")
+    config.addinivalue_line(
+        "markers",
+        "real_api: requires ANTHROPIC_API_KEY — skipped automatically when absent",
+    )
+
+
+def pytest_collection_modifyitems(items):
+    """Auto-skip real_api tests when ANTHROPIC_API_KEY is not configured."""
+    key = os.getenv("ANTHROPIC_API_KEY", "")
+    if key and key != "dummy":
+        return  # key present — let all tests run
+    skip = pytest.mark.skip(reason="ANTHROPIC_API_KEY not set — real API test skipped")
+    for item in items:
+        if item.get_closest_marker("real_api"):
+            item.add_marker(skip)
 
 @pytest.hookimpl(tryfirst=True,hookwrapper=True)
 def pytest_runtest_makereport(item, call):

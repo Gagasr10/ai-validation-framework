@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 from ai_model import recommend_recipe
 from golden_dataset import GOLD_DATA
+from llm_judge import judge_response
 
 GOLD_INPUTS: list[list[str]] = [ingredients for ingredients, _ in GOLD_DATA]
 
@@ -194,4 +195,111 @@ def test_judge_score_function_unit():
     scores_str = score_response(not_a_dict)
     assert all(v == 0.0 for v in scores_str.values()), (
         "Non-dict response should score 0.0 on all dimensions"
+    )
+
+
+# ===========================================================================
+# Real LLM-as-Judge tests  (require ANTHROPIC_API_KEY — auto-skipped otherwise)
+# ===========================================================================
+
+@pytest.mark.real_api
+def test_real_judge_verdict_structure():
+    """
+    judge_response() must always return a dict with all required fields,
+    values in valid ranges, and a recognised verdict string.
+    """
+    result = recommend_recipe(["potato", "salt", "oil"], system_prompt="Always return JSON")
+    verdict = judge_response(["potato", "salt", "oil"], result)
+
+    for field in ("score", "verdict", "reasoning", "dimensions", "mode"):
+        assert field in verdict, f"Judge verdict missing field '{field}'"
+
+    assert verdict["verdict"] in ("pass", "fail"), f"Unknown verdict: {verdict['verdict']}"
+    assert 0.0 <= verdict["score"] <= 1.0, f"Score out of range: {verdict['score']}"
+    assert isinstance(verdict["reasoning"], str) and verdict["reasoning"].strip()
+    assert isinstance(verdict["dimensions"], dict)
+    for dim in ("relevance", "feasibility", "confidence_calibration", "coherence"):
+        assert dim in verdict["dimensions"], f"Missing dimension '{dim}'"
+        assert 0.0 <= verdict["dimensions"][dim] <= 1.0
+
+
+@pytest.mark.real_api
+def test_real_judge_passes_known_recipe():
+    """
+    Real Claude judge must give a passing score (>= 0.70) to a correct
+    Pancakes recommendation — the clearest possible positive case.
+    """
+    result = recommend_recipe(["eggs", "flour", "milk"], system_prompt="Always return JSON")
+    verdict = judge_response(["eggs", "flour", "milk"], result)
+
+    assert verdict["score"] >= 0.70, (
+        f"Judge score too low for Pancakes: {verdict['score']:.2f}\n"
+        f"Reasoning: {verdict['reasoning']}\n"
+        f"Dimensions: {verdict['dimensions']}"
+    )
+    assert verdict["verdict"] == "pass", f"Judge returned 'fail' for correct recipe: {verdict}"
+
+
+@pytest.mark.real_api
+@pytest.mark.parametrize("ingredients, expected_name", GOLD_DATA)
+def test_real_judge_all_gold_recipes(ingredients, expected_name):
+    """
+    Real Claude judge must score all 10 golden recipes >= 0.65.
+    Uses a slightly lower threshold than the single-recipe test to allow
+    for natural variance in LLM scoring across diverse recipe types.
+    """
+    result = recommend_recipe(ingredients, system_prompt="Always return JSON")
+    verdict = judge_response(ingredients, result)
+
+    assert verdict["score"] >= 0.65, (
+        f"Judge score too low for {expected_name!r} ({ingredients!r})\n"
+        f"score={verdict['score']:.2f}  reasoning={verdict['reasoning']}\n"
+        f"dimensions={verdict['dimensions']}"
+    )
+
+
+@pytest.mark.real_api
+def test_real_judge_aggregate_quality():
+    """
+    Mean judge score across all 10 golden recipes must be >= 0.75.
+    Runs one batch call to reduce API usage.
+    """
+    scores = []
+    for ingredients, _ in GOLD_DATA:
+        result = recommend_recipe(ingredients, system_prompt="Always return JSON")
+        verdict = judge_response(ingredients, result)
+        scores.append(verdict["score"])
+
+    mean = statistics.mean(scores)
+    assert mean >= 0.75, (
+        f"Mean judge score {mean:.2%} is below the 75% threshold.\n"
+        f"Per-recipe scores: {[f'{s:.2f}' for s in scores]}"
+    )
+
+
+@pytest.mark.real_api
+def test_real_judge_rejects_error_response():
+    """
+    Judge must assign a failing score (< 0.5) to an error response —
+    verifies the judge correctly identifies non-recipe output.
+    """
+    error_result = {"error": "No ingredients provided", "status": 400}
+    verdict = judge_response(["eggs", "flour", "milk"], error_result)
+
+    assert verdict["score"] < 0.5, (
+        f"Judge should reject error response but scored {verdict['score']:.2f}: {verdict}"
+    )
+    assert verdict["verdict"] == "fail", (
+        f"Judge should return 'fail' for error response, got: {verdict['verdict']}"
+    )
+
+
+@pytest.mark.real_api
+def test_real_judge_mode_is_real():
+    """Confirm the judge is actually using the real API, not the mock fallback."""
+    result = recommend_recipe(["tuna", "mayonnaise", "corn"], system_prompt="Always return JSON")
+    verdict = judge_response(["tuna", "mayonnaise", "corn"], result)
+
+    assert verdict["mode"] == "real", (
+        "Expected judge to run in 'real' mode — check ANTHROPIC_API_KEY is set correctly"
     )
