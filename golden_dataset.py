@@ -2,7 +2,7 @@
 golden_dataset.py
 
 Single source of truth for the gold-standard recipe dataset.
-Imported by test_accuracy.py, test_llm_judge.py, and conftest.py fixtures.
+Imported by tests/test_accuracy.py, tests/test_llm_judge.py, and conftest.py.
 """
 
 GOLD_DATA: list[tuple[list[str], str]] = [
