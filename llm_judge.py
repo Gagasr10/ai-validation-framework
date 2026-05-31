@@ -218,6 +218,9 @@ def judge_response(
                 return _call_openai_judge(ingredients, result, model)
             except Exception as exc:
                 logger.warning("OpenAI judge error (%s) — falling back to mock.", exc)
+                fallback = _mock_judge(ingredients, result)
+                fallback["fallback_reason"] = str(exc)
+                return fallback
     else:
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if api_key and api_key != "dummy":
@@ -225,5 +228,8 @@ def judge_response(
                 return _call_claude_judge(ingredients, result, model)
             except Exception as exc:
                 logger.warning("Claude judge error (%s) — falling back to mock.", exc)
+                fallback = _mock_judge(ingredients, result)
+                fallback["fallback_reason"] = str(exc)
+                return fallback
 
     return _mock_judge(ingredients, result)
