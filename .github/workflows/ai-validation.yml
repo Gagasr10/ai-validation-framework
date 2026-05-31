@@ -10,6 +10,8 @@ jobs:
   validate:
     name: Run AI Validation Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required for GitHub Pages deployment
 
     strategy:
       matrix:
@@ -36,7 +38,8 @@ jobs:
         run: |
           pytest tests/ -v --tb=short \
             --ignore=tests/test_performance.py \
-            -m "not slow"
+            -m "not slow" \
+            --alluredir=allure-results
         env:
           ANTHROPIC_API_KEY: ""
           OPENAI_API_KEY: ""
@@ -46,7 +49,8 @@ jobs:
       # ---------------------------------------------------------------
       - name: Run Claude real-API + judge tests
         run: |
-          pytest tests/ -v --tb=short -m "real_api"
+          pytest tests/ -v --tb=short -m "real_api" \
+            --alluredir=allure-results
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_KEY }}
@@ -56,7 +60,8 @@ jobs:
       # ---------------------------------------------------------------
       - name: Run GPT-4o-mini judge tests
         run: |
-          pytest tests/ -v --tb=short -m "openai_judge"
+          pytest tests/ -v --tb=short -m "openai_judge" \
+            --alluredir=allure-results
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_KEY }}
@@ -73,8 +78,52 @@ jobs:
           ANTHROPIC_API_KEY: ""
 
       # ---------------------------------------------------------------
-      # Upload artefacts
+      # Allure report — generate and publish
       # ---------------------------------------------------------------
+      - name: Write Allure environment info
+        if: always()
+        run: |
+          cat > allure-results/environment.properties << EOF
+          Python.Version=${{ matrix.python-version }}
+          OS=ubuntu-latest
+          Framework=pytest + allure-pytest
+          SUT.Model=claude-haiku-4-5-20251001
+          Judge.1=claude-haiku-4-5-20251001 (Anthropic)
+          Judge.2=gpt-4o-mini (OpenAI)
+          Repository=https://github.com/Gagasr10/ai-validation-framework
+          EOF
+
+      - name: Install Allure CLI
+        if: always()
+        run: |
+          curl -o allure.tgz -Ls \
+            https://repo.maven.apache.org/maven2/io/qameta/allure/allure-commandline/2.27.0/allure-commandline-2.27.0.tgz
+          sudo tar -zxf allure.tgz -C /opt/
+          sudo ln -s /opt/allure-2.27.0/bin/allure /usr/bin/allure
+
+      - name: Generate Allure HTML report
+        if: always()
+        run: allure generate allure-results -o allure-report --clean
+
+      - name: Upload Allure report as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report-py${{ matrix.python-version }}
+          path: allure-report
+          retention-days: 30
+
+      # Publish to GitHub Pages — only on main branch, only Python 3.12
+      # (single matrix run avoids concurrent push conflicts on gh-pages branch)
+      # Prerequisites: Settings → Pages → Source: Deploy from branch → gh-pages / root
+      - name: Deploy Allure report to GitHub Pages
+        if: always() && github.ref == 'refs/heads/main' && matrix.python-version == '3.12'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: allure-report
+          publish_branch: gh-pages
+
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4

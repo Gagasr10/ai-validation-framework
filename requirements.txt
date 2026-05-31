@@ -3,5 +3,6 @@ openai>=1.0.0
 pytest>=8.0.0
 pytest-check>=2.3.0
 pytest-benchmark>=4.0.0
+allure-pytest>=2.13.5
 tenacity>=8.2.0
 python-dotenv>=1.0.0
