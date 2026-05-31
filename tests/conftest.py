@@ -8,7 +8,12 @@ import os
 from datetime import datetime
 
 import pytest
+from dotenv import load_dotenv
 from golden_dataset import GOLD_DATA
+
+# Load .env from repo root when running locally.
+# In CI the file doesn't exist — load_dotenv() is a no-op in that case.
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # ---------------------------------------------------------------------------
 # Hooks
