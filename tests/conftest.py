@@ -8,6 +8,7 @@ import os
 from datetime import datetime
 
 import pytest
+from golden_dataset import GOLD_DATA
 
 # ---------------------------------------------------------------------------
 # Hooks
@@ -44,12 +45,18 @@ def api_mode() -> str:
 
 @pytest.fixture
 def known_ingredients():
-    """A set of ingredient lists that have deterministic gold answers."""
+    """Three representative gold entries — kept for backward compatibility."""
     return [
         (["eggs", "flour", "milk"], "Pancakes"),
         (["potato", "salt", "oil"], "French fries"),
         (["tuna", "mayonnaise", "corn"], "Tuna salad"),
     ]
+
+
+@pytest.fixture(scope="session")
+def golden_dataset():
+    """Full gold-standard dataset — 10 ingredient→recipe pairs."""
+    return GOLD_DATA
 
 
 

@@ -122,10 +122,11 @@ def recommend_recipe(ingredients, system_prompt: str = "") -> dict | str:
     """
 
     # ---- input validation (same behaviour regardless of backend) ----------
-    if ingredients is None or (isinstance(ingredients, list) and len(ingredients) == 0):
-        if random.random() < 0.3:
-            raise ValueError("Model crashed on empty input")
-        return {"error": "Empty string not allowed", "status": 400}
+    if ingredients is None:
+        raise ValueError("ingredients must not be None")
+
+    if isinstance(ingredients, list) and len(ingredients) == 0:
+        return {"error": "No ingredients provided", "status": 400}
 
     if isinstance(ingredients, str) and ingredients.strip() == "":
         return {"error": "Empty string not allowed", "status": 400}
