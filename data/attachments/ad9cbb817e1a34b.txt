@@ -1,0 +1,3 @@
+
+[api-probe] Checking Anthropic API connectivity...
+[api-probe] Anthropic: OK ✓
