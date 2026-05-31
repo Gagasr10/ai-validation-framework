@@ -23,17 +23,28 @@ def pytest_configure(config):
         "markers",
         "real_api: requires ANTHROPIC_API_KEY — skipped automatically when absent",
     )
+    config.addinivalue_line(
+        "markers",
+        "openai_judge: requires OPENAI_KEY — skipped automatically when absent",
+    )
 
 
 def pytest_collection_modifyitems(items):
-    """Auto-skip real_api tests when ANTHROPIC_API_KEY is not configured."""
-    key = os.getenv("ANTHROPIC_API_KEY", "")
-    if key and key != "dummy":
-        return  # key present — let all tests run
-    skip = pytest.mark.skip(reason="ANTHROPIC_API_KEY not set — real API test skipped")
+    """Auto-skip real_api / openai_judge tests when the required key is absent."""
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+    openai_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY", "")
+
+    has_anthropic = bool(anthropic_key and anthropic_key != "dummy")
+    has_openai = bool(openai_key)
+
+    skip_anthropic = pytest.mark.skip(reason="ANTHROPIC_API_KEY not set — skipping real_api test")
+    skip_openai = pytest.mark.skip(reason="OPENAI_KEY not set — skipping openai_judge test")
+
     for item in items:
-        if item.get_closest_marker("real_api"):
-            item.add_marker(skip)
+        if item.get_closest_marker("real_api") and not has_anthropic:
+            item.add_marker(skip_anthropic)
+        if item.get_closest_marker("openai_judge") and not has_openai:
+            item.add_marker(skip_openai)
 
 @pytest.hookimpl(tryfirst=True,hookwrapper=True)
 def pytest_runtest_makereport(item, call):

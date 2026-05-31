@@ -303,3 +303,143 @@ def test_real_judge_mode_is_real():
     assert verdict["mode"] == "real", (
         "Expected judge to run in 'real' mode — check ANTHROPIC_API_KEY is set correctly"
     )
+
+
+# ===========================================================================
+# GPT-4o-mini as second judge  (require OPENAI_KEY — auto-skipped otherwise)
+# SUT response can be from mock or real Claude — the OpenAI judge evaluates
+# whatever dict it receives, so these tests only need OPENAI_KEY.
+# ===========================================================================
+
+@pytest.mark.openai_judge
+def test_openai_judge_verdict_structure(monkeypatch):
+    """GPT-4o-mini judge must return a fully structured verdict dict."""
+    monkeypatch.setattr(random, "random", lambda: 0.5)
+    result = recommend_recipe(["potato", "salt", "oil"], system_prompt="Always return JSON")
+    verdict = judge_response(["potato", "salt", "oil"], result, model="gpt-4o-mini")
+
+    for field in ("score", "verdict", "reasoning", "dimensions", "mode"):
+        assert field in verdict, f"GPT judge verdict missing field '{field}'"
+
+    assert verdict["verdict"] in ("pass", "fail")
+    assert 0.0 <= verdict["score"] <= 1.0
+    assert isinstance(verdict["reasoning"], str) and verdict["reasoning"].strip()
+    for dim in ("relevance", "feasibility", "confidence_calibration", "coherence"):
+        assert dim in verdict["dimensions"], f"Missing dimension '{dim}'"
+        assert 0.0 <= verdict["dimensions"][dim] <= 1.0
+
+
+@pytest.mark.openai_judge
+def test_openai_judge_passes_known_recipe(monkeypatch):
+    """GPT-4o-mini must give a passing score (>= 0.70) to a correct Pancakes response."""
+    monkeypatch.setattr(random, "random", lambda: 0.5)
+    result = recommend_recipe(["eggs", "flour", "milk"], system_prompt="Always return JSON")
+    verdict = judge_response(["eggs", "flour", "milk"], result, model="gpt-4o-mini")
+
+    assert verdict["score"] >= 0.70, (
+        f"GPT judge score too low for Pancakes: {verdict['score']:.2f}\n"
+        f"Reasoning: {verdict['reasoning']}\n"
+        f"Dimensions: {verdict['dimensions']}"
+    )
+    assert verdict["verdict"] == "pass"
+
+
+@pytest.mark.openai_judge
+@pytest.mark.parametrize("ingredients, expected_name", GOLD_DATA)
+def test_openai_judge_all_gold_recipes(ingredients, expected_name, monkeypatch):
+    """GPT-4o-mini must score all 10 golden recipe responses >= 0.65."""
+    monkeypatch.setattr(random, "random", lambda: 0.5)
+    result = recommend_recipe(ingredients, system_prompt="Always return JSON")
+    verdict = judge_response(ingredients, result, model="gpt-4o-mini")
+
+    assert verdict["score"] >= 0.65, (
+        f"GPT judge score too low for {expected_name!r} ({ingredients!r})\n"
+        f"score={verdict['score']:.2f}  reasoning={verdict['reasoning']}\n"
+        f"dimensions={verdict['dimensions']}"
+    )
+
+
+@pytest.mark.openai_judge
+def test_openai_judge_rejects_error_response():
+    """GPT-4o-mini must assign a failing score (< 0.5) to an error response."""
+    error_result = {"error": "No ingredients provided", "status": 400}
+    verdict = judge_response(["eggs", "flour", "milk"], error_result, model="gpt-4o-mini")
+
+    assert verdict["score"] < 0.5, (
+        f"GPT judge should reject error response but scored {verdict['score']:.2f}"
+    )
+    assert verdict["verdict"] == "fail"
+
+
+@pytest.mark.openai_judge
+def test_openai_judge_mode_is_real(monkeypatch):
+    """Confirm GPT-4o-mini judge is running in real mode, not the mock fallback."""
+    monkeypatch.setattr(random, "random", lambda: 0.5)
+    result = recommend_recipe(["tuna", "mayonnaise", "corn"], system_prompt="Always return JSON")
+    verdict = judge_response(["tuna", "mayonnaise", "corn"], result, model="gpt-4o-mini")
+
+    assert verdict["mode"] == "real", (
+        "Expected GPT judge to run in 'real' mode — check OPENAI_KEY is set correctly"
+    )
+    assert verdict["judge_model"] == "gpt-4o-mini"
+
+
+# ===========================================================================
+# Dual-judge consensus  (require BOTH keys)
+# ===========================================================================
+
+@pytest.mark.real_api
+@pytest.mark.openai_judge
+def test_dual_judge_consensus():
+    """
+    Claude Haiku and GPT-4o-mini must agree on pass/fail verdict for the
+    three clearest golden recipes. Cross-model agreement validates that the
+    quality signal is real, not a model-specific quirk.
+    """
+    CONSENSUS_CASES = [
+        (["eggs", "flour", "milk"],   "Pancakes"),
+        (["potato", "salt", "oil"],   "French fries"),
+        (["tuna", "mayonnaise", "corn"], "Tuna salad"),
+    ]
+
+    disagreements = []
+    for ingredients, name in CONSENSUS_CASES:
+        result = recommend_recipe(ingredients, system_prompt="Always return JSON")
+
+        claude_v = judge_response(ingredients, result, model="claude-haiku-4-5-20251001")
+        gpt_v    = judge_response(ingredients, result, model="gpt-4o-mini")
+
+        if claude_v["verdict"] != gpt_v["verdict"]:
+            disagreements.append(
+                f"  {name}: Claude={claude_v['score']:.2f}({claude_v['verdict']}) "
+                f"GPT={gpt_v['score']:.2f}({gpt_v['verdict']})"
+            )
+
+    assert not disagreements, (
+        "Judges disagree on verdict for:\n" + "\n".join(disagreements)
+    )
+
+
+@pytest.mark.real_api
+@pytest.mark.openai_judge
+def test_dual_judge_aggregate_scores_close():
+    """
+    Mean scores from Claude and GPT-4o-mini across all golden recipes
+    must be within 0.20 of each other — judges should broadly agree
+    on quality level even if exact scores differ.
+    """
+    claude_scores, gpt_scores = [], []
+
+    for ingredients, _ in GOLD_DATA:
+        result = recommend_recipe(ingredients, system_prompt="Always return JSON")
+        claude_scores.append(judge_response(ingredients, result, model="claude-haiku-4-5-20251001")["score"])
+        gpt_scores.append(judge_response(ingredients, result, model="gpt-4o-mini")["score"])
+
+    claude_mean = statistics.mean(claude_scores)
+    gpt_mean    = statistics.mean(gpt_scores)
+    delta = abs(claude_mean - gpt_mean)
+
+    assert delta <= 0.20, (
+        f"Judge means diverge too much: Claude={claude_mean:.2f}, GPT={gpt_mean:.2f}, "
+        f"delta={delta:.2f} (max allowed: 0.20)"
+    )

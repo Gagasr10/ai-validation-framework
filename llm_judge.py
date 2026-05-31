@@ -1,23 +1,28 @@
 """
 llm_judge.py
 
-LLM-as-Judge: a second Claude call that semantically evaluates recipe
-recommendations produced by ai_model.py.
+LLM-as-Judge: evaluates recipe recommendations using a second LLM call.
+Supports two judge providers:
+  - Anthropic  (Claude Haiku, default)  — requires ANTHROPIC_API_KEY
+  - OpenAI     (GPT-4o-mini)            — requires OPENAI_API_KEY or OPENAI_KEY
 
 Public API
 ----------
-judge_response(ingredients, result, model) -> dict
+judge_response(ingredients, result, model="claude-haiku-4-5-20251001") -> dict
+
+Provider is auto-detected from the model name:
+  "gpt-*" / "o1-*" / "o3-*"  → OpenAI
+  everything else             → Anthropic
 
 The verdict dict always contains:
-  score      float 0-1   overall quality score
-  verdict    str         "pass" (score >= 0.70) | "fail"
-  reasoning  str         one-sentence explanation from the judge
-  dimensions dict        per-criterion scores (0-1 each)
-  mode       str         "real" | "mock"
+  score        float 0-1    overall quality score
+  verdict      str          "pass" (score >= 0.70) | "fail"
+  reasoning    str          one-sentence explanation from the judge
+  dimensions   dict         per-criterion scores (0-1 each)
+  mode         str          "real" | "mock"
+  judge_model  str | None   model used (None in mock mode)
 
-When ANTHROPIC_API_KEY is absent the module falls back to mock_judge(),
-which runs the same structural checks as the Python rubric so CI always
-has a meaningful (non-empty) result to assert on.
+Falls back to _mock_judge() when the required API key is absent.
 """
 
 from __future__ import annotations
@@ -60,38 +65,68 @@ Respond ONLY with valid JSON — no markdown fences, no extra text:
 
 
 # ---------------------------------------------------------------------------
-# Real Claude judge
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _call_claude_judge(
-    ingredients: list[str],
-    result: dict,
-    model: str,
-) -> dict:
-    import anthropic  # deferred so module loads without the package
-
-    client = anthropic.Anthropic()
-
-    prompt = _JUDGE_PROMPT.format(
-        ingredients_str=", ".join(ingredients),
-        recipe_name=result.get("recipe_name", "N/A"),
-        time_min=result.get("time_min", "N/A"),
-        confidence=result.get("confidence", "N/A"),
+def _build_prompt(ingredients: list[str], result: Any) -> str:
+    return _JUDGE_PROMPT.format(
+        ingredients_str=", ".join(str(i) for i in ingredients),
+        recipe_name=result.get("recipe_name", "N/A") if isinstance(result, dict) else "N/A",
+        time_min=result.get("time_min", "N/A") if isinstance(result, dict) else "N/A",
+        confidence=result.get("confidence", "N/A") if isinstance(result, dict) else "N/A",
         threshold=PASS_THRESHOLD,
     )
 
+
+def _parse_judge_json(raw: str) -> dict:
+    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    raw = re.sub(r"\s*```$", "", raw)
+    return json.loads(raw)
+
+
+# ---------------------------------------------------------------------------
+# Anthropic judge
+# ---------------------------------------------------------------------------
+
+def _call_claude_judge(ingredients: list[str], result: Any, model: str) -> dict:
+    import anthropic  # deferred import — module loads without the package
+
+    client = anthropic.Anthropic()
     response = client.messages.create(
         model=model,
         max_tokens=300,
         system="You are a strict but fair recipe quality judge. Always return valid JSON.",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role": "user", "content": _build_prompt(ingredients, result)}],
     )
+    verdict = _parse_judge_json(response.content[0].text)
+    verdict["mode"] = "real"
+    verdict["judge_model"] = model
+    return verdict
 
-    raw = response.content[0].text.strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
 
-    verdict = json.loads(raw)
+# ---------------------------------------------------------------------------
+# OpenAI judge
+# ---------------------------------------------------------------------------
+
+def _call_openai_judge(ingredients: list[str], result: Any, model: str) -> dict:
+    from openai import OpenAI  # deferred import
+
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY", "")
+    client = OpenAI(api_key=api_key)
+
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=300,
+        response_format={"type": "json_object"},  # GPT-4o-mini native JSON mode
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a strict but fair recipe quality judge. Always return valid JSON.",
+            },
+            {"role": "user", "content": _build_prompt(ingredients, result)},
+        ],
+    )
+    verdict = json.loads(response.choices[0].message.content)
     verdict["mode"] = "real"
     verdict["judge_model"] = model
     return verdict
@@ -103,8 +138,8 @@ def _call_claude_judge(
 
 def _mock_judge(ingredients: list[str], result: Any) -> dict:
     """
-    Deterministic structural scorer used when no API key is present.
-    Evaluates schema, types, and value ranges — not semantic quality.
+    Deterministic structural scorer — used when the relevant API key is absent.
+    Evaluates schema, types, and value ranges only (no semantic quality check).
     """
     if not isinstance(result, dict) or "error" in result:
         return {
@@ -161,24 +196,34 @@ def _mock_judge(ingredients: list[str], result: Any) -> dict:
 # Public interface
 # ---------------------------------------------------------------------------
 
+def _is_openai_model(model: str) -> bool:
+    return model.startswith(("gpt-", "o1", "o3", "o4"))
+
+
 def judge_response(
     ingredients: list[str],
     result: Any,
     model: str = "claude-haiku-4-5-20251001",
 ) -> dict:
     """
-    Evaluate a recipe recommendation with a Claude judge.
+    Evaluate a recipe recommendation with an LLM judge.
 
-    Falls back to mock_judge() when ANTHROPIC_API_KEY is absent or "dummy",
-    so this function is always safe to call in any environment.
+    Provider is auto-detected from the model name.
+    Falls back to _mock_judge() when the required API key is absent.
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    use_real = bool(api_key and api_key != "dummy")
-
-    if use_real:
-        try:
-            return _call_claude_judge(ingredients, result, model)
-        except Exception as exc:
-            logger.warning("Claude judge API error (%s) — falling back to mock judge.", exc)
+    if _is_openai_model(model):
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY", "")
+        if api_key:
+            try:
+                return _call_openai_judge(ingredients, result, model)
+            except Exception as exc:
+                logger.warning("OpenAI judge error (%s) — falling back to mock.", exc)
+    else:
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if api_key and api_key != "dummy":
+            try:
+                return _call_claude_judge(ingredients, result, model)
+            except Exception as exc:
+                logger.warning("Claude judge error (%s) — falling back to mock.", exc)
 
     return _mock_judge(ingredients, result)

@@ -29,8 +29,8 @@ jobs:
         run: pip install -r requirements.txt
 
       # ---------------------------------------------------------------
-      # Mock mode — always runs, no API key needed
-      # real_api tests are auto-skipped by conftest when key is absent
+      # Mock mode — always runs, zero API calls
+      # real_api / openai_judge tests auto-skip when keys are absent
       # ---------------------------------------------------------------
       - name: Run tests (mock mode)
         run: |
@@ -39,16 +39,27 @@ jobs:
             -m "not slow"
         env:
           ANTHROPIC_API_KEY: ""
+          OPENAI_API_KEY: ""
 
       # ---------------------------------------------------------------
-      # Real Claude API — runs every time; tests self-skip when key absent
-      # Add ANTHROPIC_API_KEY to repo secrets to activate these tests
+      # Claude Haiku judge  (auto-skips if ANTHROPIC_API_KEY not set)
       # ---------------------------------------------------------------
-      - name: Run real-API + LLM-judge tests
+      - name: Run Claude real-API + judge tests
         run: |
           pytest tests/ -v --tb=short -m "real_api"
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_KEY }}
+
+      # ---------------------------------------------------------------
+      # GPT-4o-mini judge  (auto-skips if OPENAI_KEY not set)
+      # ---------------------------------------------------------------
+      - name: Run GPT-4o-mini judge tests
+        run: |
+          pytest tests/ -v --tb=short -m "openai_judge"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_KEY }}
 
       # ---------------------------------------------------------------
       # Performance benchmarks
