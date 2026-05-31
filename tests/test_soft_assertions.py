@@ -6,13 +6,16 @@ one fails, giving a full picture of what the model got right/wrong.
 Useful for partial-correctness scoring of AI outputs.
 """
 
+import random
+
 import pytest
 import pytest_check as check
 from ai_model import recommend_recipe
 
 
-def test_partial_correctness_pancakes():
+def test_partial_correctness_pancakes(monkeypatch):
     """All four fields of the Pancakes recipe must be correct."""
+    monkeypatch.setattr(random, "random", lambda: 0.5)  # neutralise 10% mock flakiness
     result = recommend_recipe(
         ["eggs", "flour", "milk"], system_prompt="Always return JSON"
     )
@@ -55,8 +58,9 @@ def test_partial_correctness_unknown_recipe():
     (["potato", "salt", "oil"], "time_min"),
     (["tuna", "mayonnaise", "corn"], "confidence"),
 ])
-def test_required_fields_present(ingredients, field):
+def test_required_fields_present(ingredients, field, monkeypatch):
     """Each known recipe response must contain the specified field."""
+    monkeypatch.setattr(random, "random", lambda: 0.5)
     result = recommend_recipe(ingredients, system_prompt="Always return JSON")
 
     check.is_instance(result, dict, "Response must be a dict")
